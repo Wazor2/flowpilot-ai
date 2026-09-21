@@ -1,4 +1,9 @@
+# Palloti_Hackethon - FlowPilot AI
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+
+## AI Foundation (Day 1)
+The intelligent business workflow automation runtime is located in `src/ai`. It uses `@google/genai` to dynamically parse objectives, orchestrate tool calling, and manage capabilities deterministically.
 
 ## Getting Started
 
