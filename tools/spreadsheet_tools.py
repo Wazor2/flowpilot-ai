@@ -1,18 +1,35 @@
-import pandas as pd
+from backend.database import SessionLocal
+from backend.models import Payment
 
-def check_bank_reconciliation(invoice_id, csv_path="data/bank_statements.csv"):
+def check_bank_reconciliation(invoice_id, csv_path=None):
     """
-    Search CSV using pandas for pending/completed payments related to the given invoice_id.
+    Adapter: Check bank reconciliation from PostgreSQL database via backend models.
+    Matches the schema expected by the AI agent.
     """
     try:
-        df = pd.read_csv(csv_path)
-        # Check if the invoice_id is in the description
-        matched = df[df['description'].str.contains(invoice_id, case=False, na=False)]
+        db = SessionLocal()
         
-        if not matched.empty:
+        payments = (
+            db.query(Payment)
+            .filter(Payment.invoice_id == invoice_id, Payment.status == "COMPLETED")
+            .all()
+        )
+        
+        transactions = []
+        for p in payments:
+            transactions.append({
+                "id": p.id,
+                "amount": p.amount,
+                "payment_date": p.payment_date.isoformat() if p.payment_date else None,
+                "status": p.status
+            })
+            
+        db.close()
+        
+        if transactions:
             return {
                 "reconciled": True,
-                "transactions": matched.to_dict(orient='records')
+                "transactions": transactions
             }
         else:
             return {
