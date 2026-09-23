@@ -16,7 +16,9 @@ The runtime guards are configurable through `MAX_REPLANS` (default `3`) and `MAX
 Focused verification from the repository root:
 
 ```bash
-PYTHONPATH=. pytest -q tests/test_ai_provider_resilience.py tests/integration_test.py
+PYTHONPATH=. pytest -q tests/test_ai_provider_resilience.py tests/test_graph_recovery.py tests/integration_test.py
 ```
+
+`tests/test_graph_recovery.py` uses fake structured-output providers and test-only registered tools to exercise the real planner → executor → replan graph. It verifies both injected-failure recovery and the transition to `PAUSED` when the replan limit is exceeded, without requiring live LLM keys.
 
 The deterministic Demo Mode/frontend path is unchanged; only AI Mode uses the provider manager.
