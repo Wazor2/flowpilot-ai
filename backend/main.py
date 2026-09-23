@@ -20,48 +20,10 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title="FlowPilot Backend API")
 
 def run_orchestrator(workflow_id: str):
-    import utils.audit_logger
     from backend.database import SessionLocal
-    from backend.models import AuditEvent, Workflow
-    import uuid
-
-    original_log_event = utils.audit_logger.AuditLogger.log_event
-
-    def patched_log_event(self, agent_name, action, details):
-        res = original_log_event(self, agent_name, action, details)
-        db = SessionLocal()
-        try:
-            db_event = AuditEvent(
-                id=str(uuid.uuid4()),
-                workflow_id=workflow_id,
-                event_type=action,
-                actor=agent_name,
-                metadata_json=details
-            )
-            db.add(db_event)
-            db.commit()
-            
-            if action == "Workflow Completed":
-                wf = db.query(Workflow).filter(Workflow.id == workflow_id).first()
-                if wf:
-                    wf.status = "COMPLETED"
-                    db.commit()
-            elif action == "Workflow Failed":
-                wf = db.query(Workflow).filter(Workflow.id == workflow_id).first()
-                if wf:
-                    wf.status = "FAILED"
-                    db.commit()
-        except Exception as e:
-            print("DB Log Error:", e)
-        finally:
-            db.close()
-        return res
-
-    utils.audit_logger.AuditLogger.log_event = patched_log_event
-
+    from backend.models import Workflow
     try:
         orchestrator = Orchestrator()
-        
         db = SessionLocal()
         try:
             wf = db.query(Workflow).filter(Workflow.id == workflow_id).first()
@@ -69,7 +31,17 @@ def run_orchestrator(workflow_id: str):
         finally:
             db.close()
             
-        orchestrator.run_workflow(workflow_id=workflow_id, goal=objective)
+        state = orchestrator.run_workflow(workflow_id=workflow_id, goal=objective)
+        db = SessionLocal()
+        try:
+            wf = db.query(Workflow).filter(Workflow.id == workflow_id).first()
+            if wf:
+                wf.status = state.status
+                wf.current_plan = [step.model_dump() for step in state.plan]
+                wf.current_step = str(state.current_step_index)
+                db.commit()
+        finally:
+            db.close()
     except Exception as e:
         print(f"Workflow execution failed: {e}")
         db = SessionLocal()
@@ -80,8 +52,6 @@ def run_orchestrator(workflow_id: str):
                 db.commit()
         finally:
             db.close()
-    finally:
-        utils.audit_logger.AuditLogger.log_event = original_log_event
 
 @app.post("/api/workflows")
 def create_workflow(payload: Dict[str, Any], background_tasks: BackgroundTasks, db: Session = Depends(get_db)):

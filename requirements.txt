@@ -8,3 +8,6 @@ pytest
 streamlit
 pandas
 python-dotenv
+langgraph
+google-generativeai
+openai

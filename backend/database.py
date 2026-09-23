@@ -5,15 +5,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/flowpilot.db")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is required. Configure PostgreSQL explicitly; "
+        "only tests may set DATABASE_URL to sqlite:///:memory:."
+    )
+if DATABASE_URL.startswith("sqlite") and DATABASE_URL not in {"sqlite:///:memory:", "sqlite+pysqlite:///:memory:"}:
+    raise RuntimeError("File-backed SQLite is disabled; use PostgreSQL or sqlite:///:memory: for tests.")
 
-if DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-else:
-    engine = create_engine(DATABASE_URL)
+engine_kwargs = {"connect_args": {"check_same_thread": False}} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
 Base = declarative_base()
+
 
 def get_db():
     db = SessionLocal()
