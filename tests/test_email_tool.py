@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import datetime
+import base64
 import os
 import uuid
+from email import policy
+from email.parser import BytesParser
+from pathlib import Path
 from unittest.mock import MagicMock
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
@@ -62,7 +66,7 @@ def test_draft_invoice_email_uses_structured_ai_output(monkeypatch):
         db.close()
 
 
-def test_live_email_sends_with_gmail_smtp_and_records_communication(monkeypatch):
+def test_live_email_sends_through_gmail_api_and_records_communication(monkeypatch, tmp_path):
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
@@ -89,14 +93,20 @@ def test_live_email_sends_with_gmail_smtp_and_records_communication(monkeypatch)
             status="SUCCESS",
         ))
         db.commit()
-        smtp_instance = MagicMock()
-        smtp_instance.send_message.return_value = {}
-        smtp_factory = MagicMock()
-        smtp_factory.return_value.__enter__.return_value = smtp_instance
-        monkeypatch.setattr(email_tool.smtplib, "SMTP", smtp_factory)
+        token_file = tmp_path / ".gmail_token.json"
+        token_file.write_text('{"refresh_token":"test-refresh-token"}', encoding="utf-8")
+        monkeypatch.setattr(email_tool, "GMAIL_TOKEN_PATH", token_file)
+        credentials = MagicMock()
+        monkeypatch.setattr(email_tool, "Credentials", MagicMock(return_value=credentials))
+        build_service = MagicMock()
+        gmail_service = build_service.return_value
+        gmail_service.users.return_value.messages.return_value.send.return_value.execute.return_value = {
+            "id": "gmail-message-id"
+        }
+        monkeypatch.setattr(email_tool, "build", build_service)
         monkeypatch.setenv("EMAIL_MODE", "live")
-        monkeypatch.setenv("EMAIL_SMTP_USER", "ommanjules@gmail.com")
-        monkeypatch.setenv("EMAIL_APP_PASSWORD", "abcd efgh ijkl mnop")
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+        monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
 
         result = email_tool.send_email_execute({
             "recipient": "billing@acme.test",
@@ -106,26 +116,30 @@ def test_live_email_sends_with_gmail_smtp_and_records_communication(monkeypatch)
         }, context)
 
         assert result.status == "SUCCESS"
-        assert result.verificationMode == "SMTP_ACCEPTED"
-        smtp_factory.assert_called_once_with("smtp.gmail.com", 587, timeout=30.0)
-        smtp_instance.starttls.assert_called_once_with()
-        smtp_instance.login.assert_called_once_with("ommanjules@gmail.com", "abcdefghijklmnop")
-        smtp_instance.send_message.assert_called_once()
-        sent = smtp_instance.send_message.call_args.args[0]
+        assert result.verificationMode == "GMAIL_API_ACCEPTED"
+        assert result.data["message_id"] == "gmail-message-id"
+        credentials.refresh.assert_called_once()
+        build_service.assert_called_once_with("gmail", "v1", credentials=credentials, cache_discovery=False)
+        send_request = gmail_service.users.return_value.messages.return_value.send
+        send_request.assert_called_once()
+        assert send_request.call_args.kwargs["userId"] == "me"
+        raw = send_request.call_args.kwargs["body"]["raw"]
+        raw += "=" * (-len(raw) % 4)
+        sent = BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(raw))
         assert sent["To"] == "billing@acme.test"
         assert sent["Subject"] == "Invoice INV-43 reminder"
+        assert sent.get_content().strip() == "Please review your invoice."
         communication = db.query(Communication).filter_by(invoice_id="inv-send").one()
         assert communication.status == "SENT"
     finally:
         db.close()
 
 
-def test_live_email_requires_app_password(monkeypatch):
+def test_live_email_requires_gmail_authorization(monkeypatch, tmp_path):
     monkeypatch.setenv("EMAIL_MODE", "live")
-    monkeypatch.setenv("EMAIL_SMTP_USER", "ommanjules@gmail.com")
-    monkeypatch.delenv("EMAIL_APP_PASSWORD", raising=False)
+    monkeypatch.setattr(email_tool, "GMAIL_TOKEN_PATH", tmp_path / ".gmail_token.json")
     result = email_tool.send_email_execute({
         "recipient": "billing@acme.test", "subject": "Invoice", "body": "Reminder"
     }, MagicMock())
     assert result.status == "FAILED"
-    assert "EMAIL_APP_PASSWORD" in result.error
+    assert result.error == "Gmail not authorized yet — visit /auth/google/login"

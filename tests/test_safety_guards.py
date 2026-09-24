@@ -114,7 +114,7 @@ def test_planner_redacts_customer_pii_from_provider_payload(monkeypatch):
     test_engine.dispose()
 
 
-def test_duplicate_action_id_cannot_send_email_twice(monkeypatch):
+def test_duplicate_action_id_cannot_send_email_twice(monkeypatch, tmp_path):
     factory, test_engine = _database(monkeypatch)
     workflow_id = f"wf-idempotent-{uuid.uuid4()}"
     with factory() as db:
@@ -126,14 +126,20 @@ def test_duplicate_action_id_cannot_send_email_twice(monkeypatch):
             action_id=str(uuid.uuid4()),
             db=db,
         )
-        smtp_instance = MagicMock()
-        smtp_instance.send_message.return_value = {}
-        smtp_factory = MagicMock()
-        smtp_factory.return_value.__enter__.return_value = smtp_instance
-        monkeypatch.setattr(email_tool.smtplib, "SMTP", smtp_factory)
+        token_file = tmp_path / ".gmail_token.json"
+        token_file.write_text('{"refresh_token":"test-refresh-token"}', encoding="utf-8")
+        monkeypatch.setattr(email_tool, "GMAIL_TOKEN_PATH", token_file)
+        credentials = MagicMock()
+        monkeypatch.setattr(email_tool, "Credentials", MagicMock(return_value=credentials))
+        gmail_service = MagicMock()
+        gmail_service.users.return_value.messages.return_value.send.return_value.execute.return_value = {
+            "id": "gmail-message-id"
+        }
+        build_service = MagicMock(return_value=gmail_service)
+        monkeypatch.setattr(email_tool, "build", build_service)
         monkeypatch.setenv("EMAIL_MODE", "live")
-        monkeypatch.setenv("EMAIL_SMTP_USER", "ommanjules@gmail.com")
-        monkeypatch.setenv("EMAIL_APP_PASSWORD", "abcdefghijklmnop")
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
+        monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
         args = {"recipient": "billing@example.test", "subject": "Invoice", "body": "Reminder"}
 
         first = registry.execute_tool("sendEmail", args, context)
@@ -142,6 +148,6 @@ def test_duplicate_action_id_cannot_send_email_twice(monkeypatch):
         assert replay.status == "SUCCESS"
         assert replay.verificationMode == "IDEMPOTENT_REPLAY"
         assert replay.data["idempotent_replay"] is True
-        smtp_instance.send_message.assert_called_once()
+        gmail_service.users.return_value.messages.return_value.send.assert_called_once()
         assert db.query(ToolExecution).filter_by(action_id=context.action_id, tool_name="sendEmail").count() == 1
     test_engine.dispose()

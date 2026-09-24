@@ -26,6 +26,8 @@ __pycache__/
 # misc
 .DS_Store
 *.pem
+client_secret_*.json
+.gmail_token.json
 
 # debug
 npm-debug.log*

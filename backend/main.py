@@ -4,6 +4,13 @@ from typing import List, Dict, Any
 import uuid
 import sys
 import os
+import json
+import secrets
+import tempfile
+from pathlib import Path
+
+from fastapi import Request
+from fastapi.responses import RedirectResponse
 
 # Add root directory to path to import agents
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,6 +25,112 @@ from .tools import registry
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="FlowPilot Backend API")
+
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+GOOGLE_STATE_COOKIE = "flowpilot_google_oauth_state"
+GMAIL_TOKEN_PATH = Path(__file__).resolve().parents[1] / ".gmail_token.json"
+
+
+def _google_oauth_config() -> tuple[dict[str, Any], str]:
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    redirect_uri = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
+    if not client_id or not client_secret or not redirect_uri:
+        raise HTTPException(status_code=503, detail="Google OAuth is not configured")
+    return {
+        "web": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [redirect_uri],
+        }
+    }, redirect_uri
+
+
+@app.get("/auth/google/login")
+def google_oauth_login(request: Request):
+    from google_auth_oauthlib.flow import Flow
+
+    client_config, redirect_uri = _google_oauth_config()
+    state = secrets.token_urlsafe(32)
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=[GMAIL_SEND_SCOPE],
+        state=state,
+        redirect_uri=redirect_uri,
+    )
+    authorization_url, _ = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    response = RedirectResponse(authorization_url, status_code=302)
+    response.set_cookie(
+        GOOGLE_STATE_COOKIE,
+        state,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        max_age=600,
+        path="/auth/google",
+    )
+    return response
+
+
+@app.get("/auth/google/callback")
+def google_oauth_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None):
+    from google_auth_oauthlib.flow import Flow
+
+    if error:
+        raise HTTPException(status_code=400, detail="Google authorization was not completed")
+    cookie_state = request.cookies.get(GOOGLE_STATE_COOKIE, "")
+    if not state or not cookie_state or not secrets.compare_digest(state, cookie_state):
+        raise HTTPException(status_code=400, detail="Invalid or expired Google OAuth state")
+    if not code:
+        raise HTTPException(status_code=400, detail="Google authorization code is missing")
+
+    client_config, redirect_uri = _google_oauth_config()
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=[GMAIL_SEND_SCOPE],
+        state=state,
+        redirect_uri=redirect_uri,
+    )
+    try:
+        flow.fetch_token(code=code)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Google authorization code exchange failed") from exc
+
+    refresh_token = flow.credentials.refresh_token
+    if not refresh_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Google did not issue a refresh token; revisit /auth/google/login and approve offline access",
+        )
+
+    token_path = GMAIL_TOKEN_PATH
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=token_path.parent, prefix=".gmail-token-", suffix=".tmp", delete=False
+        ) as token_file:
+            temp_path = Path(token_file.name)
+            os.chmod(temp_path, 0o600)
+            json.dump({"refresh_token": refresh_token}, token_file)
+        os.replace(temp_path, token_path)
+        try:
+            os.chmod(token_path, 0o600)
+        except OSError:
+            pass
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+    response = RedirectResponse("/", status_code=303)
+    response.delete_cookie(GOOGLE_STATE_COOKIE, path="/auth/google")
+    return response
 
 def run_orchestrator(workflow_id: str):
     from backend.database import SessionLocal

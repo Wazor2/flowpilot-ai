@@ -11,3 +11,5 @@ python-dotenv
 langgraph
 google-generativeai
 openai
+google-auth-oauthlib
+google-api-python-client

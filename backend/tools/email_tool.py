@@ -1,10 +1,15 @@
 import os
-import smtplib
+import json
 import uuid
+import base64
 from email.message import EmailMessage
+from pathlib import Path
 from typing import Dict, Any
 
 from pydantic import BaseModel, Field
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 
 from agents.ai_runtime import generate_structured
 from ..models import Communication, Customer, Invoice, ToolExecution
@@ -14,6 +19,48 @@ from ..tool_registry import ToolResult, ToolContext
 class InvoiceEmailDraft(BaseModel):
     subject: str = Field(min_length=1, max_length=180)
     body: str = Field(min_length=1)
+
+
+GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+GMAIL_TOKEN_PATH = Path(__file__).resolve().parents[2] / ".gmail_token.json"
+
+
+def _send_via_gmail_api(recipient: str, subject: str, body: str) -> dict[str, Any]:
+    if not GMAIL_TOKEN_PATH.exists():
+        raise FileNotFoundError("Gmail refresh token is missing")
+    try:
+        token_data = json.loads(GMAIL_TOKEN_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FileNotFoundError("Gmail refresh token is unavailable") from exc
+    refresh_token = token_data.get("refresh_token")
+    if not refresh_token:
+        raise FileNotFoundError("Gmail refresh token is missing")
+
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        raise RuntimeError("Google OAuth client credentials are not configured")
+
+    credentials = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=[GMAIL_SEND_SCOPE],
+    )
+    credentials.refresh(Request())
+
+    message = EmailMessage()
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(body)
+    raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii").rstrip("=")
+    service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
+    return service.users().messages().send(
+        userId="me",
+        body={"raw": raw_message},
+    ).execute()
 
 def get_email_mode() -> str:
     return os.getenv("EMAIL_MODE", "sandbox").lower()
@@ -119,32 +166,9 @@ def send_email_execute(input_data: Dict[str, Any], context: ToolContext) -> Tool
     if not subject or not body:
         return ToolResult(status="FAILED", error="Email subject and body are required")
 
-    smtp_user = os.getenv("EMAIL_SMTP_USER", "ommanjules@gmail.com").strip()
-    app_password = os.getenv("EMAIL_APP_PASSWORD", "").replace(" ", "")
-    if not smtp_user or not app_password:
-        return ToolResult(status="FAILED", error="Live email requires EMAIL_SMTP_USER and EMAIL_APP_PASSWORD")
-
-    message = EmailMessage()
-    message["From"] = smtp_user
-    message["To"] = recipient
-    message["Subject"] = subject
-    message.set_content(body)
-
     try:
-        with smtplib.SMTP(
-            os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com"),
-            int(os.getenv("EMAIL_SMTP_PORT", "587")),
-            timeout=float(os.getenv("EMAIL_SMTP_TIMEOUT", "30")),
-        ) as smtp:
-            smtp.ehlo()
-            smtp.starttls()
-            smtp.ehlo()
-            smtp.login(smtp_user, app_password)
-            response = smtp.send_message(message)
-            if response:
-                return ToolResult(status="FAILED", error="SMTP server rejected one or more recipients")
-
-        message_id = message["Message-ID"] or f"<{uuid.uuid4()}@flowpilot.local>"
+        response = _send_via_gmail_api(recipient, subject, body)
+        message_id = response.get("id")
         invoice = context.db.query(Invoice).filter(Invoice.id == invoice_id).first() if invoice_id else None
         context.db.add(Communication(
             id=str(uuid.uuid4()),
@@ -160,11 +184,13 @@ def send_email_execute(input_data: Dict[str, Any], context: ToolContext) -> Tool
         return ToolResult(
             status="SUCCESS",
             data={"message_id": message_id, "recipient": recipient},
-            verificationMode="SMTP_ACCEPTED",
+            verificationMode="GMAIL_API_ACCEPTED",
         )
-    except (OSError, smtplib.SMTPException, ValueError) as exc:
+    except FileNotFoundError:
+        return ToolResult(status="FAILED", error="Gmail not authorized yet — visit /auth/google/login")
+    except Exception as exc:
         context.db.rollback()
-        return ToolResult(status="FAILED", error=f"SMTP send failed: {exc}")
+        return ToolResult(status="FAILED", error=f"Gmail API send failed: {exc}")
 
 def verify_delivery_execute(input_data: Dict[str, Any], context: ToolContext) -> ToolResult:
     message_id = input_data.get("message_id")
