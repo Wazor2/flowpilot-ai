@@ -96,6 +96,7 @@ class ToolExecution(Base):
     id = Column(String, primary_key=True, index=True)
     workflow_id = Column(String, ForeignKey("workflows.id"))
     tool_name = Column(String, nullable=False)
+    action_id = Column(String, unique=True, index=True, nullable=True)
     input = Column(JSON)
     output = Column(JSON)
     status = Column(String, default="PENDING")

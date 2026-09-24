@@ -3,6 +3,7 @@ import datetime
 from typing import Callable, Any, Dict, List, Optional
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from .models import ToolExecution, AuditEvent
 
 class ToolResult(BaseModel):
@@ -44,6 +45,23 @@ class ToolRegistry:
             return ToolResult(status="FAILED", error=f"Tool {tool_name} not found in registry")
             
         db: Session = context.db
+
+        if tool_name == "sendEmail":
+            prior_send = db.query(ToolExecution).filter_by(
+                tool_name=tool_name,
+                action_id=context.action_id,
+            ).first()
+            if prior_send:
+                if prior_send.status == "SUCCESS":
+                    return ToolResult(
+                        status="SUCCESS",
+                        data={**(prior_send.output or {}), "idempotent_replay": True},
+                        verificationMode="IDEMPOTENT_REPLAY",
+                    )
+                return ToolResult(
+                    status="FAILED",
+                    error=f"Email action {context.action_id} was already attempted (status: {prior_send.status}); refusing to send again",
+                )
         
         # Check idempotency
         idempotency_key = f"{context.workflow_id}_{context.step_id}_{context.action_id}_{tool_name}"
@@ -63,6 +81,7 @@ class ToolRegistry:
             id=execution_id,
             workflow_id=context.workflow_id,
             tool_name=tool_name,
+            action_id=context.action_id if tool_name == "sendEmail" else None,
             input=input_data,
             status="RUNNING"
         )
@@ -79,7 +98,16 @@ class ToolRegistry:
             metadata_json={"execution_id": execution_id}
         )
         db.add(audit_event)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            if tool_name == "sendEmail":
+                return ToolResult(
+                    status="FAILED",
+                    error=f"Email action {context.action_id} was concurrently claimed; refusing to send again",
+                )
+            raise
         
         # Execute tool
         try:

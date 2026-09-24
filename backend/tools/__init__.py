@@ -1,5 +1,5 @@
 from ..tool_registry import ToolRegistry, ToolDefinition
-from .email_tool import prepare_email_execute, send_email_execute, verify_delivery_execute
+from .email_tool import draft_invoice_email_execute, prepare_email_execute, send_email_execute, verify_delivery_execute
 from .customer_tool import get_customer_execute, get_customer_contacts_execute
 from .invoice_tool import get_invoice_execute, get_overdue_invoices_execute
 from .payment_tool import get_payment_status_execute, get_payment_history_execute
@@ -10,6 +10,14 @@ from .verification_tool import verify_action_execute
 registry = ToolRegistry()
 
 registry.register_tool(ToolDefinition(
+    name="draftInvoiceEmail",
+    description="Uses the configured AI provider to draft a factual, personalized reminder for one invoice and its customer",
+    inputSchema={"type": "object", "properties": {"invoice_id": {"type": "string", "description": "ID of the invoice to write about"}}, "required": ["invoice_id"]},
+    outputSchema={}, requiresApproval=False,
+    execute=draft_invoice_email_execute
+))
+
+registry.register_tool(ToolDefinition(
     name="prepareEmail",
     description="Prepares an email draft",
     inputSchema={"type": "object", "properties": {"recipient": {"type": "string", "description": "Email address of the recipient"}, "subject": {"type": "string", "description": "Subject of the email"}, "body": {"type": "string", "description": "Body of the email"}}, "required": ["recipient", "subject", "body"]},
@@ -18,8 +26,8 @@ registry.register_tool(ToolDefinition(
 ))
 registry.register_tool(ToolDefinition(
     name="sendEmail",
-    description="Sends an email",
-    inputSchema={"type": "object", "properties": {"recipient": {"type": "string", "description": "Email address of the recipient"}, "subject": {"type": "string", "description": "Subject of the email"}, "body": {"type": "string", "description": "Body of the email"}}, "required": ["recipient", "subject", "body"]},
+    description="Sends the previously AI-drafted reminder for an invoice after human approval; recipient and draft are resolved locally",
+    inputSchema={"type": "object", "properties": {"invoice_id": {"type": "string", "description": "ID of the invoice to send the locally stored draft for"}}, "required": ["invoice_id"]},
     outputSchema={}, requiresApproval=True,
     execute=send_email_execute
 ))
