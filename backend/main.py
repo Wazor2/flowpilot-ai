@@ -28,6 +28,7 @@ app = FastAPI(title="FlowPilot Backend API")
 
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 GOOGLE_STATE_COOKIE = "flowpilot_google_oauth_state"
+GOOGLE_VERIFIER_COOKIE = "flowpilot_google_oauth_code_verifier"
 GMAIL_TOKEN_PATH = Path(__file__).resolve().parents[1] / ".gmail_token.json"
 
 
@@ -75,6 +76,15 @@ def google_oauth_login(request: Request):
         max_age=600,
         path="/auth/google",
     )
+    response.set_cookie(
+        GOOGLE_VERIFIER_COOKIE,
+        flow.code_verifier,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        max_age=600,
+        path="/auth/google",
+    )
     return response
 
 
@@ -89,6 +99,9 @@ def google_oauth_callback(request: Request, code: str | None = None, state: str 
         raise HTTPException(status_code=400, detail="Invalid or expired Google OAuth state")
     if not code:
         raise HTTPException(status_code=400, detail="Google authorization code is missing")
+    code_verifier = request.cookies.get(GOOGLE_VERIFIER_COOKIE, "")
+    if not code_verifier:
+        raise HTTPException(status_code=400, detail="Google OAuth code verifier is missing or expired")
 
     client_config, redirect_uri = _google_oauth_config()
     flow = Flow.from_client_config(
@@ -97,9 +110,11 @@ def google_oauth_callback(request: Request, code: str | None = None, state: str 
         state=state,
         redirect_uri=redirect_uri,
     )
+    flow.code_verifier = code_verifier
     try:
         flow.fetch_token(code=code)
     except Exception as exc:
+        print(f"Google OAuth token exchange failed ({type(exc).__name__}): {exc}")
         raise HTTPException(status_code=400, detail="Google authorization code exchange failed") from exc
 
     refresh_token = flow.credentials.refresh_token
@@ -128,8 +143,9 @@ def google_oauth_callback(request: Request, code: str | None = None, state: str 
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)
 
-    response = RedirectResponse("/", status_code=303)
+    response = RedirectResponse("http://localhost:8000/docs", status_code=303)
     response.delete_cookie(GOOGLE_STATE_COOKIE, path="/auth/google")
+    response.delete_cookie(GOOGLE_VERIFIER_COOKIE, path="/auth/google")
     return response
 
 def run_orchestrator(workflow_id: str):
