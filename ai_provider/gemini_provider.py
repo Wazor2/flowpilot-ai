@@ -29,7 +29,7 @@ class GeminiProvider(AIProvider):
             raise ValueError("GEMINI_API_KEY is not configured")
         genai.configure(api_key=api_key)
         self.model_name = model or os.environ.get(
-            "AI_MODEL_GEMINI", "gemini-1.5-flash-latest"
+            "AI_MODEL_GEMINI", "gemini-2.5-flash"
         )
         self._model = genai.GenerativeModel(self.model_name)
 

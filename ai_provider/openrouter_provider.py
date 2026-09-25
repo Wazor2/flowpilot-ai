@@ -14,7 +14,7 @@ from .base import (
 )
 
 T = TypeVar("T", bound=BaseModel)
-OPENROUTER_FREE_MODEL = "google/gemini-2.0-flash-exp:free"
+OPENROUTER_FREE_MODEL = "openrouter/free"
 
 
 class OpenRouterProvider(AIProvider):
