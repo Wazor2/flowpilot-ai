@@ -25,7 +25,10 @@ from backend.models import Base
 from dotenv import load_dotenv
 
 load_dotenv()
-config.set_main_option("sqlalchemy.url", os.environ.get("DATABASE_URL", "postgresql://user:password@localhost/flowpilot"))
+database_url = os.environ.get("DATABASE_URL", "postgresql://user:password@localhost/flowpilot")
+# Alembic's ConfigParser uses percent interpolation; escape URL-encoded characters
+# so values such as %21 remain intact when the migration engine reads the URL.
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

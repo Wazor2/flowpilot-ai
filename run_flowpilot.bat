@@ -18,7 +18,7 @@ if errorlevel 1 (
 
 where node >nul 2>&1
 if errorlevel 1 (
-    echo Node.js was not found on PATH. Install Node.js 18.17 or newer, then retry.
+    echo Node.js was not found on PATH. Install Node.js 20.9 or newer, then retry.
     pause
     exit /b 1
 )
@@ -73,20 +73,11 @@ if errorlevel 1 (
 )
 
 echo Checking PostgreSQL connection...
-"%PYTHON%" -c "from backend.database import engine; c=engine.connect(); c.close()" >nul 2>&1
+"%PYTHON%" "%ROOT%scripts\check_postgres.py"
 if errorlevel 1 (
-    where wsl.exe >nul 2>&1
-    if not errorlevel 1 (
-        echo Trying to start PostgreSQL in the local Ubuntu-22.04 WSL instance...
-        wsl.exe -d Ubuntu-22.04 --user root -- service postgresql start >nul 2>&1
-        timeout /t 3 /nobreak >nul
-    )
-    "%PYTHON%" -c "from backend.database import engine; c=engine.connect(); c.close()" >nul 2>&1
-    if errorlevel 1 (
-        echo PostgreSQL is not reachable. Check the database host and service in .env.
-        pause
-        exit /b 1
-    )
+    echo PostgreSQL is not reachable. Check DATABASE_URL and start its database service.
+    pause
+    exit /b 1
 )
 
 echo Applying Alembic migrations...
