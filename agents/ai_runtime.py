@@ -8,7 +8,7 @@ from typing import Any, Optional, Type, TypeVar
 
 from pydantic import BaseModel
 
-from ai_provider import AIProviderManager, GeminiProvider, OpenAIProvider
+from ai_provider import AIProviderManager, GeminiProvider, OpenAIProvider, OpenRouterProvider
 from backend.database import SessionLocal
 from backend.models import AiRun, AuditEvent
 
@@ -61,8 +61,12 @@ def build_provider_manager(workflow_id: str) -> AIProviderManager:
         providers.append(GeminiProvider())
     if os.getenv("OPENAI_API_KEY"):
         providers.append(OpenAIProvider())
+    if os.getenv("OPENROUTER_API_KEY"):
+        providers.append(OpenRouterProvider())
     if not providers:
-        raise RuntimeError("No AI provider configured; set GEMINI_API_KEY and/or OPENAI_API_KEY")
+        raise RuntimeError(
+            "No AI provider configured; set GEMINI_API_KEY, OPENAI_API_KEY, and/or OPENROUTER_API_KEY"
+        )
     return AIProviderManager(
         providers=providers,
         max_validation_retries=1,

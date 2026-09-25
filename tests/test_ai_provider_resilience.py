@@ -7,6 +7,7 @@ from ai_provider.base import AIProvider, InvalidOutputError, RateLimitError
 from ai_provider.manager import AIProviderManager
 from ai_provider.schemas import ExecutionPlan
 from agents.state import State
+import agents.ai_runtime as ai_runtime
 
 
 class FakeProvider(AIProvider):
@@ -43,6 +44,29 @@ def test_invalid_output_retries_same_provider_before_fallback():
     assert result.plan_id == "p"
     assert primary.calls == 2
     assert fallback.calls == 0
+
+
+def test_openrouter_is_reached_after_gemini_and_openai_fail(monkeypatch):
+    gemini = FakeProvider("gemini", failures=1)
+    openai = FakeProvider("openai", failures=1)
+    openrouter = FakeProvider("openrouter")
+    monkeypatch.setattr(ai_runtime, "GeminiProvider", lambda: gemini)
+    monkeypatch.setattr(ai_runtime, "OpenAIProvider", lambda: openai)
+    monkeypatch.setattr(ai_runtime, "OpenRouterProvider", lambda: openrouter)
+    monkeypatch.setattr(ai_runtime, "record_ai_run", lambda *args, **kwargs: None)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+
+    manager = ai_runtime.build_provider_manager("wf-openrouter-fallback")
+    result = asyncio.run(manager.generate_structured(
+        system_prompt="", user_prompt="", response_schema=ExecutionPlan
+    ))
+
+    assert result.plan_id == "p"
+    assert gemini.calls == 1
+    assert openai.calls == 1
+    assert openrouter.calls == 1
 
 
 def test_replan_limit_pauses_state():
