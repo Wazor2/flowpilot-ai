@@ -37,8 +37,17 @@ Creates a new workflow.
 ### `GET /api/workflows/{id}`
 Gets the current status of a workflow.
 
+### `GET /api/workflows`
+Lists workflows ordered by creation time, newest first.
+
 ### `GET /api/workflows/{id}/events`
 Gets the complete audit log for a specific workflow.
+
+### `GET /api/workflows/{id}/approvals`
+Gets approvals for a workflow and includes the latest persisted invoice-email draft where available.
+
+### `GET /api/approvals`
+Lists pending approvals for workflows currently waiting for human authorization.
 
 ### `POST /api/workflows/{id}/approve`
 Approves an action waiting for approval in a workflow.
@@ -57,3 +66,5 @@ Logs a replan event when the AI encounters a failure.
 ### Resource Endpoints
 - `GET /api/invoices` - List all invoices
 - `GET /api/customers` - List all customers
+- `POST /api/customers` - Create a customer in the configured database
+- `POST /api/invoices` - Create an invoice for an existing customer in the configured database

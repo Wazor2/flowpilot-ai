@@ -7,11 +7,13 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import Link from 'next/link';
+import { RealWorkflowView } from '@/components/workflow/RealWorkflowView';
 
 import React, { useState } from 'react';
 
 export default function WorkflowControlCenter({ params }: { params: Promise<{ id: string }> }) {
   const { id } = React.use(params);
+  if (id !== 'demo-123') return <RealWorkflowView workflowId={id} />;
   const { stage, logs, approvalsGranted, runDemo, grantApprovals, resetDemo } = useWorkflowDemo();
   const [demoScriptMode, setDemoScriptMode] = useState(false);
   const [showWhatHappened, setShowWhatHappened] = useState(false);

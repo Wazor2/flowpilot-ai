@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 import uuid
@@ -7,6 +8,7 @@ import os
 import json
 import secrets
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import Request
@@ -25,6 +27,13 @@ from .tools import registry
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="FlowPilot Backend API")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("FRONTEND_ORIGINS", "http://localhost:3000").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 GOOGLE_STATE_COOKIE = "flowpilot_google_oauth_state"
@@ -193,6 +202,10 @@ def create_workflow(payload: Dict[str, Any], background_tasks: BackgroundTasks, 
     
     return {"id": wf.id, "status": wf.status}
 
+@app.get("/api/workflows")
+def list_workflows(db: Session = Depends(get_db)):
+    return db.query(Workflow).order_by(Workflow.created_at.desc()).all()
+
 @app.get("/api/workflows/{id}")
 def get_workflow(id: str, db: Session = Depends(get_db)):
     wf = db.query(Workflow).filter(Workflow.id == id).first()
@@ -204,6 +217,41 @@ def get_workflow(id: str, db: Session = Depends(get_db)):
 def get_workflow_events(id: str, db: Session = Depends(get_db)):
     events = db.query(AuditEvent).filter(AuditEvent.workflow_id == id).all()
     return events
+
+@app.get("/api/workflows/{id}/approvals")
+def get_workflow_approvals(id: str, db: Session = Depends(get_db)):
+    approvals = db.query(Approval).filter(Approval.workflow_id == id).order_by(Approval.requested_at.desc()).all()
+    drafts = db.query(ToolExecution).filter(
+        ToolExecution.workflow_id == id,
+        ToolExecution.tool_name == "draftInvoiceEmail",
+        ToolExecution.status == "SUCCESS",
+    ).order_by(ToolExecution.started_at.desc()).all()
+    latest_drafts = [row.output for row in drafts if row.output]
+    return [
+        {
+            "id": approval.id,
+            "workflow_id": approval.workflow_id,
+            "action": approval.action,
+            "reason": approval.reason,
+            "requested_at": approval.requested_at,
+            "requested_by": approval.requested_by,
+            "status": approval.status,
+            "draft": next(
+                (draft for draft in latest_drafts if draft.get("invoice_id") and approval.action in {"sendEmail", "draftInvoiceEmail"}),
+                latest_drafts[0] if latest_drafts else None,
+            ),
+        }
+        for approval in approvals
+    ]
+
+@app.get("/api/approvals")
+def list_pending_approvals(db: Session = Depends(get_db)):
+    return [
+        approval
+        for workflow in db.query(Workflow).filter(Workflow.status == "WAITING_FOR_APPROVAL").all()
+        for approval in get_workflow_approvals(workflow.id, db)
+        if approval["status"] == "PENDING"
+    ]
 
 @app.post("/api/workflows/{id}/approve")
 def approve_action(id: str, payload: Dict[str, Any], db: Session = Depends(get_db)):
@@ -264,6 +312,49 @@ def execute_tool(id: str, payload: Dict[str, Any], db: Session = Depends(get_db)
 def get_invoices(db: Session = Depends(get_db)):
     return db.query(Invoice).all()
 
+@app.post("/api/customers")
+def create_customer(payload: Dict[str, Any], db: Session = Depends(get_db)):
+    name = str(payload.get("name", "")).strip()
+    email = str(payload.get("email", "")).strip()
+    if not name or not email:
+        raise HTTPException(status_code=400, detail="Customer name and email are required")
+    customer = Customer(
+        id=str(uuid.uuid4()),
+        name=name,
+        email=email,
+        phone=payload.get("phone"),
+        status=payload.get("status", "ACTIVE"),
+        risk_level=payload.get("risk_level", "LOW"),
+    )
+    db.add(customer)
+    db.commit()
+    db.refresh(customer)
+    return customer
+
 @app.get("/api/customers")
 def get_customers(db: Session = Depends(get_db)):
     return db.query(Customer).all()
+
+@app.post("/api/invoices")
+def create_invoice(payload: Dict[str, Any], db: Session = Depends(get_db)):
+    customer_id = str(payload.get("customer_id", "")).strip()
+    if not customer_id or not db.query(Customer).filter(Customer.id == customer_id).first():
+        raise HTTPException(status_code=400, detail="A valid customer_id is required")
+    try:
+        due_date = datetime.fromisoformat(str(payload["due_date"]).replace("Z", "+00:00"))
+        amount = float(payload["amount"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="amount and ISO due_date are required") from exc
+    invoice = Invoice(
+        id=str(uuid.uuid4()),
+        invoice_number=payload.get("invoice_number") or f"INV-{uuid.uuid4().hex[:8].upper()}",
+        customer_id=customer_id,
+        amount=amount,
+        due_date=due_date,
+        status=payload.get("status", "PENDING"),
+        days_overdue=int(payload.get("days_overdue", 0)),
+    )
+    db.add(invoice)
+    db.commit()
+    db.refresh(invoice)
+    return invoice

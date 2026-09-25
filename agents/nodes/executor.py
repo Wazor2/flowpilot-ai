@@ -5,7 +5,7 @@ import json
 
 from agents.state import State, ToolExecutionResult
 from backend.database import SessionLocal
-from backend.models import Invoice, Workflow
+from backend.models import Approval, Invoice, Workflow
 from backend.tool_registry import ToolContext
 from backend.tools import registry
 from utils.audit_logger import AuditLogger
@@ -74,6 +74,25 @@ def executor_node(state: State) -> State:
 
     step = state.plan[state.current_step_index]
     if step.requires_approval and state.status != "APPROVED":
+        approval_db = SessionLocal()
+        try:
+            pending = approval_db.query(Approval).filter(
+                Approval.workflow_id == state.workflow_id,
+                Approval.action == step.tool,
+                Approval.status == "PENDING",
+            ).first()
+            if not pending:
+                approval_db.add(Approval(
+                    id=str(uuid.uuid4()),
+                    workflow_id=state.workflow_id,
+                    action=step.tool,
+                    reason=step.reason,
+                    requested_by="ExecutorAgent",
+                    status="PENDING",
+                ))
+                approval_db.commit()
+        finally:
+            approval_db.close()
         logger.log_event(
             "ExecutorAgent", "Approval Required", {"tool": step.tool, "reason": step.reason},
             workflow_id=state.workflow_id, tool=step.tool, status="WAITING_FOR_APPROVAL",

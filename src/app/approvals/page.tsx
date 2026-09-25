@@ -1,63 +1,15 @@
-import { CheckCircle, XCircle } from 'lucide-react';
+"use client";
+
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { CheckCircle, RefreshCw, XCircle } from 'lucide-react';
+import { api, type Approval } from '@/lib/api';
 
 export default function Approvals() {
-  return (
-    <div className="max-w-6xl mx-auto w-full">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Approvals Gateway</h1>
-          <p className="text-slate-500 mt-1">Review actions requiring Human-in-the-Loop authorization.</p>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
-          <div className="font-medium text-slate-700">Pending Requests (1)</div>
-        </div>
-        
-        <div className="divide-y divide-slate-100">
-          {/* Sample Approval Request */}
-          <div className="p-6">
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <div className="flex items-center gap-3 mb-1">
-                  <span className="bg-amber-100 text-amber-800 text-xs font-semibold px-2 py-0.5 rounded-full">High Priority</span>
-                  <span className="text-sm text-slate-500">Workflow: <Link href="/workflows/demo-123" className="text-blue-600 hover:underline">Overdue Invoice Resolution</Link></span>
-                </div>
-                <h3 className="text-lg font-semibold text-slate-900">Approve Communication Drafts</h3>
-              </div>
-              <div className="text-sm text-slate-400">10 mins ago</div>
-            </div>
-            
-            <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 mb-6">
-              <h4 className="font-medium text-sm text-slate-700 mb-3">Proposed Action Summary:</h4>
-              <ul className="text-sm text-slate-600 space-y-2 list-disc pl-4 mb-4">
-                <li>Send overdue reminder for INV-1042 (Amount: ₹185,000) to John Smith.</li>
-                <li>Customer risk level is classified as HIGH.</li>
-              </ul>
-              
-              <div className="bg-white border p-3 rounded text-sm text-slate-700 font-mono">
-                <strong>Subject:</strong> Payment follow-up — Invoice INV-1042<br/><br/>
-                Dear Finance Team,<br/><br/>
-                This is a follow-up regarding invoice INV-1042 which is currently overdue.<br/><br/>
-                Please arrange for payment as soon as possible.
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3">
-              <button className="px-4 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg font-medium transition-colors flex items-center gap-2">
-                <XCircle className="w-4 h-4" />
-                Reject & Edit
-              </button>
-              <button className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2 shadow-sm">
-                <CheckCircle className="w-4 h-4" />
-                Approve & Execute
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const load = async () => { try { setApprovals(await api<Approval[]>('/api/approvals')); setError(null); } catch (e) { setError(e instanceof Error ? e.message : 'Could not load approvals'); } };
+  useEffect(() => { void load(); }, []);
+  const decide = async (approval: Approval, action: 'approve' | 'reject') => { try { await api(`/api/workflows/${approval.workflow_id}/${action}`, { method: 'POST', body: JSON.stringify({ approval_id: approval.id, actor: 'dashboard-user' }) }); await load(); } catch (e) { setError(e instanceof Error ? e.message : `Could not ${action} approval`); } };
+  return <div className="mx-auto w-full max-w-6xl space-y-6"><div className="flex items-center justify-between"><div><h1 className="text-3xl font-bold tracking-tight">Approvals Gateway</h1><p className="mt-1 text-slate-500">Live pending approvals from PostgreSQL workflows.</p></div><button onClick={() => void load()} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm"><RefreshCw className="h-4 w-4" />Refresh</button></div>{error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">{error}</div>}{approvals.length === 0 && !error && <div className="rounded-xl border border-slate-200 bg-white p-12 text-center text-slate-500">No pending approvals.</div>}<div className="space-y-4">{approvals.map((approval) => <div key={approval.id} className="rounded-xl border border-amber-200 bg-white p-6 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-4"><div><div className="text-xs font-mono text-slate-400">Workflow <Link className="text-blue-600 hover:underline" href={`/workflows/${approval.workflow_id}`}>{approval.workflow_id}</Link></div><h2 className="mt-2 text-lg font-bold">{approval.action}</h2><p className="mt-1 text-sm text-slate-600">{approval.reason || 'Sensitive workflow action requires authorization.'}</p></div><span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">PENDING</span></div>{approval.draft && <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm"><div><strong>To:</strong> {approval.draft.recipient || '—'}</div><div className="mt-2"><strong>Subject:</strong> {approval.draft.subject || '—'}</div><div className="mt-3 whitespace-pre-wrap text-slate-700">{approval.draft.body || 'No draft body recorded.'}</div></div>}<div className="mt-5 flex justify-end gap-3"><button onClick={() => void decide(approval, 'reject')} className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 font-medium"><XCircle className="h-4 w-4" />Reject</button><button onClick={() => void decide(approval, 'approve')} className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 font-semibold text-white"><CheckCircle className="h-4 w-4" />Approve & Execute</button></div></div>)}</div></div>;
 }
